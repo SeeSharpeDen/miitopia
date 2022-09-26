@@ -1,18 +1,23 @@
-use std::collections::HashMap;
 use std::env;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use processor::scan_music;
-use serenity::async_trait;
+use indexmap::IndexMap;
+use processor::{apply_music, get_rand_track, scan_music};
+use rand::prelude::SmallRng;
+use rand::{Rng, SeedableRng};
 use serenity::http::CacheHttp;
-use serenity::model::channel::Message;
+use serenity::model::channel::{AttachmentType, Message};
 use serenity::model::gateway::Ready;
-use serenity::prelude::*;
+use serenity::utils::colours;
+use serenity::{async_trait, futures, prelude::*};
 
+mod error;
 mod processor;
 
 struct Handler;
+
+const MAX_LENGTH: f32 = 10.0;
 
 #[async_trait]
 impl EventHandler for Handler {
@@ -26,35 +31,86 @@ impl EventHandler for Handler {
             // Broadcast that we are typing.
             let _ = ctx.http().broadcast_typing(msg.channel_id.0);
 
+            // get our tracks.
+            let data_read = ctx.data.read().await;
+            let tracks = data_read
+                .get::<Music>()
+                .expect("Expected Music in TypeMap")
+                .read()
+                .await;
+
+            let mut rng = SmallRng::from_entropy();
+
+            // Start processing the attachments.
+            let mut raw_futures = Vec::new();
             for attachment in msg.attachments {
-                if let Some(content_type) = attachment.content_type {
-                    match content_type.as_str() {
-                        "image/png" | "image/jpeg" | "image/webp" | "image/bmp" | "image/gif" => {}
-                        _ => {
-                            if let Err(why) =
-                                msg.channel_id.say(&ctx.http, "Unsupported file type").await
-                            {
-                                println!("Error sending message: {:?}", why);
-                            }
-                            continue;
+                // Get a random track and duration.
+                let (track, track_duration) =
+                    get_rand_track(&tracks, &mut rng).expect("No track found");
+
+                // start at zero and clip the duration to our MAX.
+                let mut start: f32 = 0.0;
+                let duration = track_duration.min(MAX_LENGTH);
+
+                // only update start if the track is longer than our max.
+                if track_duration > MAX_LENGTH {
+                    start = rng.gen_range(0.0..track_duration - duration);
+                }
+                raw_futures.push(apply_music(track, start, duration, attachment));
+            }
+            let unpin_futures: Vec<_> = raw_futures.into_iter().map(Box::pin).collect();
+            let mut futures = unpin_futures;
+
+            while !futures.is_empty() {
+                match futures::future::select_all(futures).await {
+                    (Ok(file_bytes), _index, remaining) => {
+                        futures = remaining;
+                        if let Err(why) = msg
+                            .channel_id
+                            .send_message(&ctx.http, |m| {
+                                m.add_file(AttachmentType::Bytes {
+                                    data: file_bytes.into(),
+                                    filename: "miitopia.webm".to_string(),
+                                })
+                            })
+                            .await
+                        {
+                            println!("Error sending message: {:?}", why);
+                        }
+                    }
+                    (Err(error), _index, remaining) => {
+                        // Update the futures.
+                        futures = remaining;
+
+                        // Do something about the error.
+                        println!("Error: {:?}", error);
+
+                        // Create an error.
+                        if let Err(why) = msg
+                            .channel_id
+                            .send_message(&ctx.http, |m| {
+                                m.add_embed(|em| {
+                                    em.description(error.to_string())
+                                        .colour(colours::css::DANGER)
+                                        .title("⚠️ Error")
+                                })
+                            })
+                            .await
+                        {
+                            println!("Error sending message: {:?}", why);
                         }
                     }
                 }
             }
-
-            if let Err(why) = msg.channel_id.say(&ctx.http, "What?").await {
-                println!("Error sending message: {:?}", why);
-            };
         }
     }
-
     // Set a handler to be called on the `ready` event. This is called when a
     // shard is booted, and a READY payload is sent by Discord. This payload
     // contains data like the current user's guild Ids, current user data,
     // private channels, and more.
     //
     // In this case, just print what the current user's username is.
-    async fn ready(&self, _: Context, ready: Ready) {
+    async fn ready(&self, _ctx: Context, ready: Ready) {
         println!("{} is connected!", ready.user.name);
     }
 }
@@ -69,7 +125,7 @@ async fn main() {
     // Scan all our music
     println!("Scanning /resources/music");
     let music = scan_music();
-    println!("Found {} suitable tracks", music.len(),);
+    println!("Found {} tracks", music.len(),);
 
     // Create a new instance of the Client, logging in as a bot. This will
     // automatically prepend your bot token with "Bot ", which is a requirement
@@ -96,5 +152,5 @@ async fn main() {
 struct Music;
 
 impl TypeMapKey for Music {
-    type Value = Arc<RwLock<HashMap<PathBuf, f32>>>;
+    type Value = Arc<RwLock<IndexMap<PathBuf, f32>>>;
 }

@@ -3,3 +3,4 @@
 *.kra
 
 /resources/music/*.ogg
+resources/*.tar.xz
