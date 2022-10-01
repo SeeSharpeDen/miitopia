@@ -1,5 +1,7 @@
+use std::borrow::Cow;
 use std::env;
 use std::path::PathBuf;
+use std::str::from_utf8;
 use std::sync::Arc;
 
 use indexmap::IndexMap;
@@ -63,13 +65,20 @@ impl EventHandler for Handler {
 
             while !futures.is_empty() {
                 match futures::future::select_all(futures).await {
-                    (Ok(file_bytes), _index, remaining) => {
+                    (Ok(job), _index, remaining) => {
                         futures = remaining;
+                        println!(
+                            "{}\n\tTime: {}\n\tTrack: {}\n\tstderr: {}",
+                            job.attachment.url,
+                            job.job_time.as_secs(),
+                            job.audio_file.display(),
+                            job.stderr.clone().unwrap_or("empty".to_string())
+                        );
                         if let Err(why) = msg
                             .channel_id
                             .send_message(&ctx.http, |m| {
                                 m.add_file(AttachmentType::Bytes {
-                                    data: file_bytes.into(),
+                                    data: Cow::from(job.output_file),
                                     filename: "miitopia.webm".to_string(),
                                 })
                             })
@@ -104,11 +113,6 @@ impl EventHandler for Handler {
             }
         }
     }
-    // Set a handler to be called on the `ready` event. This is called when a
-    // shard is booted, and a READY payload is sent by Discord. This payload
-    // contains data like the current user's guild Ids, current user data,
-    // private channels, and more.
-    //
     // In this case, just print what the current user's username is.
     async fn ready(&self, _ctx: Context, ready: Ready) {
         println!("{} is connected!", ready.user.name);
