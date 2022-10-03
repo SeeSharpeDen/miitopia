@@ -143,10 +143,13 @@ pub async fn apply_music(
     // let mut child = ff_builder.to_command().spawn()?;
     let mut child = cmd.spawn()?;
 
-    // Write our downloaded file to stdin.
-    let stdin = child.stdin.as_mut().expect("Failed to open stdin");
-    stdin.write_all(&source_bytes)?;
-    drop(stdin);
+    // Take stdin and write downloaded file in another thread.
+    let mut stdin = child.stdin.take().expect("Failed to get stdin");
+    std::thread::spawn(move || {
+        stdin
+            .write_all(&source_bytes)
+            .expect("Failed to write to stdin");
+    });
 
     // Read our ffmpeg output.
     let output = child.wait_with_output()?;
