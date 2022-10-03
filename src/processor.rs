@@ -1,5 +1,4 @@
 use std::{
-    borrow::Cow,
     io::Write,
     path::PathBuf,
     process::Stdio,
@@ -9,6 +8,7 @@ use std::{
 use ffmpeg_cli::{FfmpegBuilder, File, Parameter};
 use glob::glob;
 use indexmap::IndexMap;
+use log::{debug, error};
 use ogg_metadata::{read_format, AudioMetadata};
 use rand::{prelude::SmallRng, Rng};
 use serenity::model::channel::Attachment;
@@ -109,7 +109,7 @@ pub async fn apply_music(
                 .option(Parameter::KeyValue("f", "gif"))
                 .option(Parameter::KeyValue("stream_loop", "-1")),
         ),
-        _ => return Err(MiitopiaError::UnsupportedFileType),
+        mime => return Err(MiitopiaError::UnsupportedFileType(mime.to_string())),
     };
     let ff_builder = ff_builder
         .output(
@@ -129,11 +129,15 @@ pub async fn apply_music(
 
     // Start ffmpeg.
     let mut cmd = ff_builder.to_command();
-    print!("{}", cmd.get_program().to_str().unwrap());
+
+    // TODO: Only run this if env_logger is logging debug messages.
+    // Get all the args from ffmpeg and join them together into one single string.
+    let mut arg_str = String::new();
     for arg in cmd.get_args() {
-        print!(" {}", arg.to_str().unwrap());
+        arg_str.push(' ');
+        arg_str.push_str(arg.to_str().unwrap_or_default());
     }
-    println!();
+    debug!("{} {}", cmd.get_program().to_str().unwrap(), arg_str);
 
     // let mut child = ff_builder.to_command().spawn()?;
     let mut child = cmd.spawn()?;
@@ -150,8 +154,19 @@ pub async fn apply_music(
         let err_str = String::from_utf8_lossy(&output.stderr);
         let err_str = err_str.trim();
 
-        println!("ffmpeg error: {}", err_str);
+        error!("ffmpeg error: {}", err_str);
         return Err(MiitopiaError::Ffmpeg(err_str.to_string()));
+    }
+
+    let mut stderr = String::from_utf8(output.stderr).ok();
+    if stderr.is_some() {
+        let str = stderr.unwrap();
+        let str = str.trim();
+        if str.is_empty() {
+            stderr = None;
+        } else {
+            stderr = Some(str.to_string())
+        }
     }
 
     Ok(JobResult {
@@ -159,6 +174,6 @@ pub async fn apply_music(
         attachment,
         audio_file,
         output_file: output.stdout,
-        stderr: String::from_utf8(output.stderr).ok(),
+        stderr: stderr,
     })
 }

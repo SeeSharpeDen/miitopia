@@ -1,17 +1,17 @@
 use std::borrow::Cow;
 use std::env;
 use std::path::PathBuf;
-use std::str::from_utf8;
 use std::sync::Arc;
 
+use human_repr::{HumanCount, HumanDuration};
 use indexmap::IndexMap;
+use log::{error, info, warn};
 use processor::{apply_music, get_rand_track, scan_music};
 use rand::prelude::SmallRng;
 use rand::{Rng, SeedableRng};
 use serenity::http::CacheHttp;
-use serenity::model::channel::{AttachmentType, Message};
+use serenity::model::channel::{AttachmentType, Message, MessageReference};
 use serenity::model::gateway::Ready;
-use serenity::utils::colours;
 use serenity::{async_trait, futures, prelude::*};
 
 mod error;
@@ -67,10 +67,13 @@ impl EventHandler for Handler {
                 match futures::future::select_all(futures).await {
                     (Ok(job), _index, remaining) => {
                         futures = remaining;
-                        println!(
-                            "{}\n\tTime: {}\n\tTrack: {}\n\tstderr: {}",
+
+                        // TODO: Don't print this (clone stderr!!) if env_logger isn't logging info.
+                        info!(
+                            "Processed {}\n\tSize: {}\n\tTime: {}\n\tTrack: {}\n\tffmpeg stderr: {}",
                             job.attachment.url,
-                            job.job_time.as_secs(),
+                            job.output_file.len().human_count_bytes(),
+                            job.job_time.human_duration(),
                             job.audio_file.display(),
                             job.stderr.clone().unwrap_or("empty".to_string())
                         );
@@ -84,29 +87,20 @@ impl EventHandler for Handler {
                             })
                             .await
                         {
-                            println!("Error sending message: {:?}", why);
+                            warn!("Error sending message: {:?}", why);
                         }
                     }
                     (Err(error), _index, remaining) => {
                         // Update the futures.
                         futures = remaining;
 
-                        // Do something about the error.
-                        println!("Error: {:?}", error);
+                        // Print the error to the console.
+                        warn!("Error: {:?}", error);
 
-                        // Create an error.
-                        if let Err(why) = msg
-                            .channel_id
-                            .send_message(&ctx.http, |m| {
-                                m.add_embed(|em| {
-                                    em.description(error.to_string())
-                                        .colour(colours::css::DANGER)
-                                        .title("⚠️ Error")
-                                })
-                            })
-                            .await
-                        {
-                            println!("Error sending message: {:?}", why);
+                        // Reply with an error message.
+                        let r = MessageReference::from((msg.channel_id, msg.id)).clone();
+                        if let Err(why) = error.reply_error(&ctx.http, r).await {
+                            warn!("Failed to send error message: {:?}", why);
                         }
                     }
                 }
@@ -115,21 +109,26 @@ impl EventHandler for Handler {
     }
     // In this case, just print what the current user's username is.
     async fn ready(&self, _ctx: Context, ready: Ready) {
-        println!("{} is connected!", ready.user.name);
+        info!("{} is connected!", ready.user.name);
     }
 }
 
 #[tokio::main]
 async fn main() {
+    env_logger::init();
     // Configure the client with your Discord bot token in the environment.
     let token = env::var("DISCORD_TOKEN").expect("Expected a token in the environment");
     // Set gateway intents, which decides what events the bot will be notified about
     let intents = GatewayIntents::GUILD_MESSAGES | GatewayIntents::MESSAGE_CONTENT;
 
     // Scan all our music
-    println!("Scanning /resources/music");
+    info!("Scanning /resources/music");
     let music = scan_music();
-    println!("Found {} tracks", music.len(),);
+    if music.len() > 0 {
+        info!("Found {} tracks", music.len(),);
+    } else {
+        error!("no tracks found.");
+    }
 
     // Create a new instance of the Client, logging in as a bot. This will
     // automatically prepend your bot token with "Bot ", which is a requirement
@@ -149,7 +148,7 @@ async fn main() {
     // Shards will automatically attempt to reconnect, and will perform
     // exponential backoff until it reconnects.
     if let Err(why) = client.start().await {
-        println!("Client error: {:?}", why);
+        error!("Client error: {:?}", why);
     }
 }
 

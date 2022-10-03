@@ -1,7 +1,13 @@
 use core::fmt;
 use std::io;
 
-use serenity::prelude::*;
+use serenity::{
+    builder::CreateMessage,
+    http::Http,
+    model::channel::{Message, MessageReference},
+    prelude::*,
+    utils::colours,
+};
 
 #[derive(Debug)]
 pub enum MiitopiaError {
@@ -9,7 +15,7 @@ pub enum MiitopiaError {
     Ffmpeg(String),
     Io(io::Error),
     InvalidFileType,
-    UnsupportedFileType,
+    UnsupportedFileType(String),
 }
 
 impl fmt::Display for MiitopiaError {
@@ -19,7 +25,9 @@ impl fmt::Display for MiitopiaError {
             MiitopiaError::Ffmpeg(e) => write!(f, "Ffmpeg Error: {}", e),
             MiitopiaError::Io(e) => write!(f, "IO Error: {}", e),
             MiitopiaError::InvalidFileType => write!(f, "Invalid File Type"),
-            MiitopiaError::UnsupportedFileType => write!(f, "File Type not supported."),
+            MiitopiaError::UnsupportedFileType(mime) => {
+                write!(f, "Unsupported File Type: {}", mime)
+            }
         }
     }
 }
@@ -32,5 +40,37 @@ impl From<io::Error> for MiitopiaError {
 impl From<SerenityError> for MiitopiaError {
     fn from(e: SerenityError) -> Self {
         MiitopiaError::Serenity(e)
+    }
+}
+
+impl MiitopiaError {
+    pub fn embed_error(&self, msg: &mut CreateMessage) {
+        msg.add_embed(|em| {
+            match self {
+                MiitopiaError::Serenity(e) => em.title("🔥 Serenity Error").description(e),
+                MiitopiaError::Ffmpeg(e) => em.title("🎞 FFmpeg Error").description(e),
+                MiitopiaError::Io(e) => em.title("💾 IO Error").description(e),
+                MiitopiaError::InvalidFileType => em.title("🚩Invalid File Type"),
+                MiitopiaError::UnsupportedFileType(mime) => em
+                    .title("🤷 Unsupported File")
+                    .description(format!("The file type *{}* is not supported.", mime)),
+            };
+            em.color(colours::css::DANGER).footer(|f| {
+                f.text("If you think this is a mistake, report this issue on github. https://github.com/SeeSharpeDen/miitopia/issues").icon_url("https://github.com/SeeSharpeDen/miitopia/raw/master/resources/discord-profile.png")
+            })
+        });
+    }
+    pub async fn reply_error(
+        &self,
+        http: impl AsRef<Http>,
+        reference: MessageReference,
+    ) -> Result<Message, SerenityError> {
+        reference
+            .channel_id
+            .send_message(http, |msg| {
+                self.embed_error(msg);
+                msg.reference_message(reference)
+            })
+            .await
     }
 }

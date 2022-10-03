@@ -16,9 +16,14 @@ and videos sent to it.
 3. obtain the miitopia sound track and make sure it's the correct format. See
    [soundtrack](#soundtrack)
 
-4. Set the `DISCORD_TOKEN` environment variable with your token and run
-   `cargo run`.
-   > Alternatively `DISCORD_TOKEN="[ Token Goes Here ] cargo run`
+4. Set the env vars and run `cargo run`.
+   > - The `DISCORD_TOKEN` env var is required. It has your discord bot token.
+   > - The `RUST_LOG` env var sets the logging. Read
+     [here for more](https://docs.rs/env_logger/latest/env_logger/?search=Color#enabling-logging)
+     details.
+   
+   **Example:**
+   `RUST_LOG=warn,miitopia=debug DISCORD_TOKEN="[ Token Goes Here ]" cargo run`
 
 ## Soundtrack
 
