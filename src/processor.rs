@@ -115,6 +115,7 @@ pub async fn apply_music(
         .output(
             File::new("-")
                 .option(Parameter::KeyValue("f", "webm"))
+                .option(Parameter::KeyValue("vf", "format=yuv420p"))
                 .option(Parameter::KeyValue("map", "0:a:0"))
                 .option(Parameter::KeyValue("map", "1:v:0"))
                 .option(Parameter::KeyValue("t", duration_str.as_str()))
