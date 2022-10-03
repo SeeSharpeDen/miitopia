@@ -95,7 +95,7 @@ impl EventHandler for Handler {
                         futures = remaining;
 
                         // Print the error to the console.
-                        warn!("Error: {:?}", error);
+                        error!("Error: {}", error);
 
                         // Reply with an error message.
                         let r = MessageReference::from((msg.channel_id, msg.id)).clone();

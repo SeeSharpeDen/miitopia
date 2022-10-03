@@ -88,7 +88,8 @@ pub async fn apply_music(
                     .to_str()
                     .expect("Failed to convert PathBuf to str"),
             )
-            .option(Parameter::KeyValue("ss", start_str.as_str())),
+            .option(Parameter::KeyValue("ss", start_str.as_str()))
+            .option(Parameter::KeyValue("t", duration_str.as_str())),
         );
 
     // Get the mimetype of the attachment.
@@ -97,30 +98,41 @@ pub async fn apply_music(
         None => return Err(MiitopiaError::InvalidFileType),
     };
 
+    let mut shortest = true;
+
     // Depending on what kind of file we get, we need to do different things.
-    let ff_builder = match mimetype.as_str() {
-        "image/png" | "image/jpeg" | "image/webp" | "image/bmp" => ff_builder.input(
-            File::new("-")
-                .option(Parameter::KeyValue("f", "image2pipe"))
-                .option(Parameter::KeyValue("framerate", "24")),
-        ),
+    let mut ff_builder = match mimetype.as_str() {
+        "image/png" | "image/jpeg" | "image/webp" | "image/bmp" => {
+            shortest = false;
+            ff_builder.input(
+                File::new("-")
+                    .option(Parameter::KeyValue("f", "image2pipe"))
+                    .option(Parameter::KeyValue("framerate", "24")),
+            )
+        }
         "image/gif" => ff_builder.input(
             File::new("-")
                 .option(Parameter::KeyValue("f", "gif"))
                 .option(Parameter::KeyValue("stream_loop", "-1")),
         ),
+        "video/webm" => ff_builder.input(File::new("-").option(Parameter::KeyValue("f", "webm"))),
         mime => return Err(MiitopiaError::UnsupportedFileType(mime.to_string())),
     };
-    let ff_builder = ff_builder
-        .output(
-            File::new("-")
-                .option(Parameter::KeyValue("f", "webm"))
-                .option(Parameter::KeyValue("vf", "format=yuv420p"))
-                .option(Parameter::KeyValue("map", "0:a:0"))
-                .option(Parameter::KeyValue("map", "1:v:0"))
-                .option(Parameter::KeyValue("t", duration_str.as_str()))
-                .option(Parameter::KeyValue("threads", "4")),
-        )
+
+    // Create our output
+    let mut output = File::new("-")
+        .option(Parameter::KeyValue("f", "webm"))
+        .option(Parameter::KeyValue("vf", "format=yuv420p"))
+        .option(Parameter::KeyValue("map", "0:a:0"))
+        .option(Parameter::KeyValue("map", "1:v:0"))
+        .option(Parameter::KeyValue("threads", "4"));
+
+    if shortest {
+        output = output.option(Parameter::Single("shortest"));
+    }
+
+    ff_builder = ff_builder
+        .output(output)
         .stdout(Stdio::piped())
         .stdin(Stdio::piped())
         .stderr(Stdio::piped());
@@ -138,9 +150,9 @@ pub async fn apply_music(
         arg_str.push(' ');
         arg_str.push_str(arg.to_str().unwrap_or_default());
     }
-    debug!("{} {}", cmd.get_program().to_str().unwrap(), arg_str);
+    debug!("{}{}", cmd.get_program().to_str().unwrap(), arg_str);
 
-    // let mut child = ff_builder.to_command().spawn()?;
+    // Start ffmpeg.
     let mut child = cmd.spawn()?;
 
     // Take stdin and write downloaded file in another thread.
@@ -158,7 +170,6 @@ pub async fn apply_music(
         let err_str = String::from_utf8_lossy(&output.stderr);
         let err_str = err_str.trim();
 
-        error!("ffmpeg error: {}", err_str);
         return Err(MiitopiaError::Ffmpeg(err_str.to_string()));
     }
 
