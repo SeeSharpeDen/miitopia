@@ -16,6 +16,8 @@ pub enum MiitopiaError {
     Io(io::Error),
     InvalidFileType,
     UnsupportedFileType(String),
+    Reqwest(reqwest::Error),
+    NoTracks,
 }
 
 impl fmt::Display for MiitopiaError {
@@ -27,7 +29,9 @@ impl fmt::Display for MiitopiaError {
             MiitopiaError::InvalidFileType => write!(f, "Invalid File Type"),
             MiitopiaError::UnsupportedFileType(mime) => {
                 write!(f, "Unsupported File Type: {}", mime)
-            }
+            },
+            MiitopiaError::NoTracks => write!(f, "No Tracks"),
+            MiitopiaError::Reqwest(e) => write!(f, "Reqwest Error: {}", e),
         }
     }
 }
@@ -43,6 +47,12 @@ impl From<SerenityError> for MiitopiaError {
     }
 }
 
+impl From<reqwest::Error> for MiitopiaError {
+    fn from(e: reqwest::Error) -> Self {
+        MiitopiaError::Reqwest(e)
+    }
+}
+
 impl MiitopiaError {
     pub fn embed_error(&self, msg: &mut CreateMessage) {
         msg.add_embed(|em| {
@@ -54,6 +64,9 @@ impl MiitopiaError {
                 MiitopiaError::UnsupportedFileType(mime) => em
                     .title("🤷 Unsupported File")
                     .description(format!("The file type *{}* is not supported.", mime)),
+                MiitopiaError::Reqwest(e) => { em.title("🌐 Requwest ˘꒳˘ Error ").description(e) },
+                MiitopiaError::NoTracks => todo!(),
+                
             };
             em.color(colours::css::DANGER).footer(|f| {
                 f.text("If you think this is a mistake, report this issue on github. https://github.com/SeeSharpeDen/miitopia/issues").icon_url("https://github.com/SeeSharpeDen/miitopia/raw/master/resources/discord-profile.png")

@@ -8,9 +8,8 @@ use std::{
 use ffmpeg_cli::{FfmpegBuilder, File, Parameter};
 use glob::glob;
 use indexmap::IndexMap;
-use log::{debug, error};
+use log::debug;
 use ogg_metadata::{read_format, AudioMetadata};
-use rand::{prelude::SmallRng, Rng};
 use serenity::model::channel::Attachment;
 
 use crate::error::MiitopiaError;
@@ -48,19 +47,8 @@ pub fn scan_music() -> IndexMap<PathBuf, f32> {
     }
     map
 }
-pub fn get_rand_track(
-    tracks: &IndexMap<PathBuf, f32>,
-    random: &mut SmallRng,
-) -> Option<(PathBuf, f32)> {
-    let index = random.gen_range(0..tracks.len());
-    if let Some((path, duration)) = tracks.get_index(index) {
-        return Some((path.clone(), duration.clone()));
-    }
-    return None;
-}
-
 pub struct JobResult {
-    pub audio_file: PathBuf,
+    pub audio_file: String,
     pub attachment: Attachment,
     pub stderr: Option<String>,
     pub output_file: Vec<u8>,
@@ -68,7 +56,7 @@ pub struct JobResult {
 }
 
 pub async fn apply_music(
-    audio_file: PathBuf,
+    audio_file: String,
     start: f32,
     duration: f32,
     attachment: Attachment,
@@ -83,13 +71,9 @@ pub async fn apply_music(
         .option(Parameter::KeyValue("loglevel", "error"))
         .option(Parameter::Single("nostdin"))
         .input(
-            File::new(
-                audio_file
-                    .to_str()
-                    .expect("Failed to convert PathBuf to str"),
-            )
-            .option(Parameter::KeyValue("ss", start_str.as_str()))
-            .option(Parameter::KeyValue("t", duration_str.as_str())),
+            File::new(audio_file.as_str())
+                .option(Parameter::KeyValue("ss", start_str.as_str()))
+                .option(Parameter::KeyValue("t", duration_str.as_str())),
         );
 
     // Get the mimetype of the attachment.

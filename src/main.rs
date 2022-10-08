@@ -3,17 +3,20 @@ use std::env;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use audio_source::AudioSource;
 use human_repr::{HumanCount, HumanDuration};
 use indexmap::IndexMap;
-use log::{error, info, warn};
-use processor::{apply_music, get_rand_track, scan_music};
+use log::{debug, error, info, warn};
+use processor::{apply_music, scan_music};
 use rand::prelude::SmallRng;
-use rand::{Rng, SeedableRng};
+use rand::SeedableRng;
+use regex::Regex;
 use serenity::http::CacheHttp;
 use serenity::model::channel::{AttachmentType, Message, MessageReference};
 use serenity::model::gateway::Ready;
 use serenity::{async_trait, futures, prelude::*};
 
+mod audio_source;
 mod error;
 mod processor;
 
@@ -33,6 +36,8 @@ impl EventHandler for Handler {
             // Broadcast that we are typing.
             let _ = ctx.http().broadcast_typing(msg.channel_id.0);
 
+            debug!("{}: {}", msg.author.name, msg.content_safe(&ctx.cache));
+
             // get our tracks.
             let data_read = ctx.data.read().await;
             let tracks = data_read
@@ -41,24 +46,36 @@ impl EventHandler for Handler {
                 .read()
                 .await;
 
+            // Setup our rng.
             let mut rng = SmallRng::from_entropy();
+
+            let mut source = AudioSource::Miitopia;
+
+            // If the message contains a url assume it's an audio source.
+            let re = Regex::new(r"https://[^\s]*").unwrap();
+            if let Some(url) = re.captures_iter(&msg.content_safe(&ctx.cache)).next() {
+                source = AudioSource::Url(url[0].to_string());
+            }
+
+            // If we cannot validate the source, return the error.
+            if let Some(error) = source.validate(&tracks).await {
+                let r = MessageReference::from((msg.channel_id, msg.id)).clone();
+                if let Err(why) = error.reply_error(&ctx.http, r).await {
+                    warn!("Failed to send error message: {:?}", why);
+                }
+                return;
+            }
 
             // Start processing the attachments.
             let mut raw_futures = Vec::new();
             for attachment in msg.attachments {
-                // Get a random track and duration.
-                let (track, track_duration) =
-                    get_rand_track(&tracks, &mut rng).expect("No track found");
-
-                // start at zero and clip the duration to our MAX.
-                let mut start: f32 = 0.0;
-                let duration = track_duration.min(MAX_LENGTH);
-
-                // only update start if the track is longer than our max.
-                if track_duration > MAX_LENGTH {
-                    start = rng.gen_range(0.0..track_duration - duration);
+                let track = source.get_track(&tracks, &mut rng);
+                match track {
+                    Ok((path, start)) => {
+                        raw_futures.push(apply_music(path, start, MAX_LENGTH, attachment))
+                    }
+                    Err(_) => todo!(),
                 }
-                raw_futures.push(apply_music(track, start, duration, attachment));
             }
             let unpin_futures: Vec<_> = raw_futures.into_iter().map(Box::pin).collect();
             let mut futures = unpin_futures;
@@ -74,7 +91,7 @@ impl EventHandler for Handler {
                             job.attachment.url,
                             job.output_file.len().human_count_bytes(),
                             job.job_time.human_duration(),
-                            job.audio_file.display(),
+                            job.audio_file,
                             job.stderr.clone().unwrap_or("empty".to_string())
                         );
                         if let Err(why) = msg
