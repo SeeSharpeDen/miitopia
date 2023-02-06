@@ -66,6 +66,10 @@ impl From<SpotifyError> for MiitopiaError {
 impl MiitopiaError {
     pub fn embed_error(&self, msg: &mut CreateMessage) {
         msg.add_embed(|em| {
+            em.color(colours::css::DANGER);
+            em.footer(|f| {
+                f.text("If you think this is a mistake, report this issue on github. https://github.com/SeeSharpeDen/miitopia/issues").icon_url("https://github.com/SeeSharpeDen/miitopia/raw/master/resources/discord-profile.png")
+            });
             match self {
                 MiitopiaError::Serenity(e) => em.title("🔥 Serenity Error").description(e),
                 MiitopiaError::Ffmpeg(e) => em.title("🎞 FFmpeg Error").description(e),
@@ -76,12 +80,13 @@ impl MiitopiaError {
                     .description(format!("The file type *{}* is not supported.", mime)),
                 MiitopiaError::Reqwest(e) => em.title("🌐 Requwest ˘꒳˘ Error ").description(e),
                 MiitopiaError::NoTracks => em.title("🔥 No Audio Found").description("Miitopia could not find any audio."),
-                MiitopiaError::Spotify(e) => em.title(format!("🌐 Spotify Error")).description(e),
+                MiitopiaError::Spotify(e) => match e {
+                    SpotifyError::NotFound => em.title("Preview NOT FUCKING FOUND").description("AAARRRRGGGGHHHH.... S P O T I F Y!\n\nwhat **THE FUCK** are you DOINGGGG!\nApparently according to Spotify, this song doesn't have a preview available in this market (AU). Despite it working perfectly fine right there ☝️ AND DESPITE it working INSIDE THEIR OWN FUCKING API DOCUMENTATION. Due to the lack of documentation on spotify's SHIT ASS FUCKIUNG WEAK ASS CUNT developer website (honestly pretty decent IMO) this song won't work. FML spotify is hard to deal with."),
+                    _ => em.title(format!("🌐 Spotify Error")).description(e).color(colours::css::POSITIVE)
+                },
                 
             };
-            em.color(colours::css::DANGER).footer(|f| {
-                f.text("If you think this is a mistake, report this issue on github. https://github.com/SeeSharpeDen/miitopia/issues").icon_url("https://github.com/SeeSharpeDen/miitopia/raw/master/resources/discord-profile.png")
-            })
+            em
         });
     }
     pub async fn reply_error(
