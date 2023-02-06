@@ -6,7 +6,7 @@ use std::sync::Arc;
 use audio_source::AudioSource;
 use human_repr::{HumanCount, HumanDuration};
 use indexmap::IndexMap;
-use log::{debug, error, info, warn};
+use log::{debug, error, info, trace, warn};
 use processor::{apply_music, scan_music};
 use rand::prelude::SmallRng;
 use rand::SeedableRng;
@@ -19,6 +19,7 @@ use serenity::{async_trait, futures, prelude::*};
 mod audio_source;
 mod error;
 mod processor;
+mod spotify;
 
 struct Handler;
 
@@ -32,93 +33,88 @@ impl EventHandler for Handler {
     // Event handlers are dispatched through a threadpool, and so multiple
     // events can be dispatched simultaneously.
     async fn message(&self, ctx: Context, msg: Message) {
-        if msg.mentions_me(ctx.http()).await.unwrap_or_default() {
-            // Broadcast that we are typing.
-            let _ = ctx.http().broadcast_typing(msg.channel_id.0);
+        // Bail out if the message doesn't mention this bot.
+        if !msg.mentions_me(ctx.http()).await.unwrap_or_default() {
+            return;
+        }
 
-            debug!("{}: {}", msg.author.name, msg.content_safe(&ctx.cache));
+        //TODO: Bail out if no valid attachments are provided.
 
-            // get our tracks.
-            let data_read = ctx.data.read().await;
-            let tracks = data_read
-                .get::<Music>()
-                .expect("Expected Music in TypeMap")
-                .read()
-                .await;
+        // Broadcast that we are typing.
+        let _ = ctx.http().broadcast_typing(msg.channel_id.0);
 
-            // Setup our rng.
-            let mut rng = SmallRng::from_entropy();
+        debug!("{}: {}", msg.author.name, msg.content_safe(&ctx.cache));
 
-            let mut source = AudioSource::Miitopia;
+        // Setup our rng.
+        let mut rng = SmallRng::from_entropy();
 
-            // If the message contains a url assume it's an audio source.
-            let re = Regex::new(r"https://[^\s]*").unwrap();
-            if let Some(url) = re.captures_iter(&msg.content_safe(&ctx.cache)).next() {
-                source = AudioSource::Url(url[0].to_string());
-            }
+        // Get the content of the discord message.
+        let msg_content = &msg.content_safe(&ctx.cache);
 
-            // If we cannot validate the source, return the error.
-            if let Some(error) = source.validate(&tracks).await {
-                let r = MessageReference::from((msg.channel_id, msg.id)).clone();
-                if let Err(why) = error.reply_error(&ctx.http, r).await {
-                    warn!("Failed to send error message: {:?}", why);
+        // Find out where our audio is coming from. Url, Spotify or Miitopia?
+        let source = AudioSource::from_msg_content(&msg_content);
+        trace!("Using {} AudioSource", source);
+
+        // Start processing the attachments.
+        let mut raw_futures = Vec::new();
+        for attachment in msg.attachments {
+            let track = source.get_track(&ctx.data, &mut rng).await;
+            match track {
+                Ok((path, start)) => {
+                    raw_futures.push(apply_music(path, start, MAX_LENGTH, attachment))
                 }
-                return;
-            }
-
-            // Start processing the attachments.
-            let mut raw_futures = Vec::new();
-            for attachment in msg.attachments {
-                let track = source.get_track(&tracks, &mut rng);
-                match track {
-                    Ok((path, start)) => {
-                        raw_futures.push(apply_music(path, start, MAX_LENGTH, attachment))
+                Err(err) => {
+                    error!("Failed to get track: {:?} for {}", err, msg.id);
+                    let r = MessageReference::from((msg.channel_id, msg.id)).clone();
+                    if let Err(why) = err.reply_error(&ctx.http, r).await {
+                        warn!("Failed to send error message: {:?}", why);
                     }
-                    Err(_) => todo!(),
+                    return;
                 }
             }
-            let unpin_futures: Vec<_> = raw_futures.into_iter().map(Box::pin).collect();
-            let mut futures = unpin_futures;
+        }
 
-            while !futures.is_empty() {
-                match futures::future::select_all(futures).await {
-                    (Ok(job), _index, remaining) => {
-                        futures = remaining;
+        let unpin_futures: Vec<_> = raw_futures.into_iter().map(Box::pin).collect();
+        let mut futures = unpin_futures;
 
-                        // TODO: Don't print this (clone stderr!!) if env_logger isn't logging info.
-                        info!(
-                            "Processed {}\n\tSize: {}\n\tTime: {}\n\tTrack: {}\n\tffmpeg stderr: {}",
-                            job.attachment.url,
-                            job.output_file.len().human_count_bytes(),
-                            job.job_time.human_duration(),
-                            job.audio_file,
-                            job.stderr.clone().unwrap_or("empty".to_string())
-                        );
-                        if let Err(why) = msg
-                            .channel_id
-                            .send_message(&ctx.http, |m| {
-                                m.add_file(AttachmentType::Bytes {
-                                    data: Cow::from(job.output_file),
-                                    filename: "miitopia.webm".to_string(),
-                                })
+        while !futures.is_empty() {
+            match futures::future::select_all(futures).await {
+                (Ok(job), _index, remaining) => {
+                    futures = remaining;
+
+                    // TODO: Don't print this (clone stderr!!) if env_logger isn't logging info.
+                    info!(
+                        "Processed {}\n\tSize: {}\n\tTime: {}\n\tTrack: {}\n\tffmpeg stderr: {}",
+                        job.attachment.url,
+                        job.output_file.len().human_count_bytes(),
+                        job.job_time.human_duration(),
+                        job.audio_file,
+                        job.stderr.clone().unwrap_or("empty".to_string())
+                    );
+                    if let Err(why) = msg
+                        .channel_id
+                        .send_message(&ctx.http, |m| {
+                            m.add_file(AttachmentType::Bytes {
+                                data: Cow::from(job.output_file),
+                                filename: "miitopia.webm".to_string(),
                             })
-                            .await
-                        {
-                            warn!("Error sending message: {:?}", why);
-                        }
+                        })
+                        .await
+                    {
+                        warn!("Error sending message: {:?}", why);
                     }
-                    (Err(error), _index, remaining) => {
-                        // Update the futures.
-                        futures = remaining;
+                }
+                (Err(error), _index, remaining) => {
+                    // Update the futures.
+                    futures = remaining;
 
-                        // Print the error to the console.
-                        error!("Error: {}", error);
+                    // Print the error to the console.
+                    error!("Error: {}", error);
 
-                        // Reply with an error message.
-                        let r = MessageReference::from((msg.channel_id, msg.id)).clone();
-                        if let Err(why) = error.reply_error(&ctx.http, r).await {
-                            warn!("Failed to send error message: {:?}", why);
-                        }
+                    // Reply with an error message.
+                    let r = MessageReference::from((msg.channel_id, msg.id)).clone();
+                    if let Err(why) = error.reply_error(&ctx.http, r).await {
+                        warn!("Failed to send error message: {:?}", why);
                     }
                 }
             }
@@ -138,6 +134,16 @@ async fn main() {
     // Set gateway intents, which decides what events the bot will be notified about
     let intents = GatewayIntents::GUILD_MESSAGES | GatewayIntents::MESSAGE_CONTENT;
 
+    // Get a spotify token.
+    let client_id = env::var("SPOTIFY_ID").expect("Expected SPOTIFY_ID env var to be set.");
+    let client_secret = env::var("SPOTIFY_SECRET").expect("Expected SPOTIFY_ID env var to be set.");
+    let spotify = match spotify::Spotify::from_credentials(client_id, client_secret).await {
+        Ok(spotify) => spotify,
+        Err(e) => {
+            panic!("Spotify Error: {}", e)
+        }
+    };
+
     // Scan all our music
     info!("Scanning /resources/music");
     let music = scan_music();
@@ -156,12 +162,13 @@ async fn main() {
         .expect("Err creating client");
 
     {
+        // Add our music and spotify to the context data.
         let mut data = client.data.write().await;
         data.insert::<Music>(Arc::new(RwLock::new(music)));
+        data.insert::<spotify::Spotify>(Arc::new(RwLock::new(spotify)));
     }
 
     // Finally, start a single shard, and start listening to events.
-    //
     // Shards will automatically attempt to reconnect, and will perform
     // exponential backoff until it reconnects.
     if let Err(why) = client.start().await {

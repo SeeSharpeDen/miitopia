@@ -5,6 +5,13 @@
 This discord bot will add random snippets of the miitopia sound track to images
 and videos sent to it.
 
+![screenshot](./resources/miitopia-screenshot.png)
+
+## Usage
+Attach an image to your message in discord and mention `@miitopia`.
+
+You can add a url to a short MP3 (myinstants.com for example) or a spotify URI to the message to make miitopia use that instead.
+
 ## Setup
 
 1. [Install rust](https://www.rust-lang.org/tools/install) and
@@ -16,8 +23,15 @@ and videos sent to it.
 3. obtain the miitopia sound track and make sure it's the correct format. See
    [soundtrack](#soundtrack)
 
-4. Set the env vars and run `cargo run`.
-   > - The `DISCORD_TOKEN` env var is required. It has your discord bot token.
+4. *Optional.* add spotify api client env vars.
+
+   > go to https://developer.spotify.com/dashboard/applications and create a new application.
+   > - Set the `SPOTIFY_ID` env var for spotify client id.
+   > - Set the `SPOTIFY_SECRET` env var for spotify client secret.
+
+5. Set the env vars and run `cargo run`.
+
+   > - The `DISCORD_TOKEN` env var is required. It stores your discord bot token.
    > - The `RUST_LOG` env var sets the logging. Read
      [here for more](https://docs.rs/env_logger/latest/env_logger/?search=Color#enabling-logging)
      details.

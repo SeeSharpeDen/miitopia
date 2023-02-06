@@ -12,7 +12,7 @@ serenity = { version = "0.11.5", default-features = false, features = [
     "rustls_backend",
     "model",
     "cache",
-    "utils"
+    "utils",
 ] }
 tokio = { version = "1.21.1", features = ["full"] }
 ogg_metadata = "0.4.1"
@@ -22,6 +22,10 @@ indexmap = "1.9.1"
 ffmpeg-cli = "0.1.0"
 log = "0.4.17"
 env_logger = "0.9.0"
-human-repr = "1.0"
-reqwest = "0.11.12"
-regex = "1.6.0"
+human-repr = "1.0" # what's this?
+
+reqwest = "0.11.12"   # Making requests to spotify API and web sourced music.
+regex = "1.6.0"       # Checking for urls inside messges.
+serde_json = "1.0.92" # Reading json from spotify API.
+serde = "1.0.152"     # String typed json from spotify API.
+base64 = "0.21.0"     # Base64 for spotify API tokens.

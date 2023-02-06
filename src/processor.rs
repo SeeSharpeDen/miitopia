@@ -14,6 +14,7 @@ use serenity::model::channel::Attachment;
 
 use crate::error::MiitopiaError;
 
+// TODO: Make this async.
 pub fn scan_music() -> IndexMap<PathBuf, f32> {
     let mut map = IndexMap::new();
 

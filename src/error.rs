@@ -9,6 +9,8 @@ use serenity::{
     utils::colours,
 };
 
+use crate::spotify::{SpotifyError};
+
 #[derive(Debug)]
 pub enum MiitopiaError {
     Serenity(SerenityError),
@@ -18,6 +20,7 @@ pub enum MiitopiaError {
     UnsupportedFileType(String),
     Reqwest(reqwest::Error),
     NoTracks,
+    Spotify(SpotifyError)
 }
 
 impl fmt::Display for MiitopiaError {
@@ -32,6 +35,7 @@ impl fmt::Display for MiitopiaError {
             },
             MiitopiaError::NoTracks => write!(f, "No Tracks"),
             MiitopiaError::Reqwest(e) => write!(f, "Reqwest Error: {}", e),
+            MiitopiaError::Spotify(e) => write!(f, "Spotify API Error: {}", e),
         }
     }
 }
@@ -53,6 +57,12 @@ impl From<reqwest::Error> for MiitopiaError {
     }
 }
 
+impl From<SpotifyError> for MiitopiaError {
+    fn from(e: SpotifyError) -> Self {
+        MiitopiaError::Spotify(e)
+    }
+}
+
 impl MiitopiaError {
     pub fn embed_error(&self, msg: &mut CreateMessage) {
         msg.add_embed(|em| {
@@ -64,8 +74,9 @@ impl MiitopiaError {
                 MiitopiaError::UnsupportedFileType(mime) => em
                     .title("🤷 Unsupported File")
                     .description(format!("The file type *{}* is not supported.", mime)),
-                MiitopiaError::Reqwest(e) => { em.title("🌐 Requwest ˘꒳˘ Error ").description(e) },
-                MiitopiaError::NoTracks => todo!(),
+                MiitopiaError::Reqwest(e) => em.title("🌐 Requwest ˘꒳˘ Error ").description(e),
+                MiitopiaError::NoTracks => em.title("🔥 No Audio Found").description("Miitopia could not find any audio."),
+                MiitopiaError::Spotify(e) => em.title(format!("🌐 Spotify Error")).description(e),
                 
             };
             em.color(colours::css::DANGER).footer(|f| {
