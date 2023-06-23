@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     io::Write,
     path::PathBuf,
     process::Stdio,
@@ -7,12 +8,19 @@ use std::{
 
 use ffmpeg_cli::{FfmpegBuilder, File, Parameter};
 use glob::glob;
+use human_repr::{HumanCount, HumanDuration};
 use indexmap::IndexMap;
 use log::debug;
 use ogg_metadata::{read_format, AudioMetadata};
-use serenity::model::channel::Attachment;
+use rand::{rngs::SmallRng, SeedableRng};
+use serenity::{
+    futures,
+    http::CacheHttp,
+    model::prelude::{Attachment, AttachmentType, Message, MessageReference},
+    prelude::*,
+};
 
-use crate::error::MiitopiaError;
+use crate::{audio_source::AudioSource, error::MiitopiaError, MAX_AUDIO_LENGTH};
 
 // TODO: Make this async.
 pub fn scan_music() -> IndexMap<PathBuf, f32> {
@@ -176,4 +184,86 @@ pub async fn apply_music(
         output_file: output.stdout,
         stderr: stderr,
     })
+}
+
+pub async fn process_message(ctx: &Context, msg: &Message) -> Result<(), Vec<MiitopiaError>> {
+    let _ = ctx.http().broadcast_typing(msg.channel_id.0);
+
+    debug!("{}: {}", msg.author.name, msg.content_safe(&ctx.cache));
+
+    // Setup our rng.
+    let mut rng = SmallRng::from_entropy();
+
+    // Get the content of the discord message.
+    let msg_content = &msg.content_safe(&ctx.cache);
+
+    // Find out where our audio is coming from. Url, Spotify or Miitopia?
+    let source = AudioSource::from_msg_content(&msg_content);
+    log::trace!("Using {} AudioSource", source);
+
+    let mut errors: Vec<MiitopiaError> = vec![];
+
+    // Start processing the attachments.
+    let mut raw_futures = Vec::new();
+    for attachment in msg.attachments.clone() {
+        let track = source.get_track(&ctx.data, &mut rng).await;
+        match track {
+            Ok((path, start)) => {
+                raw_futures.push(apply_music(path, start, MAX_AUDIO_LENGTH, attachment))
+            }
+            Err(err) => {
+                log::error!("Failed to get track: {:?} for {}", err, msg.id);
+                errors.push(err);
+            }
+        }
+    }
+
+    let unpin_futures: Vec<_> = raw_futures.into_iter().map(Box::pin).collect();
+    let mut futures = unpin_futures;
+
+    while !futures.is_empty() {
+        match futures::future::select_all(futures).await {
+            (Ok(job), _index, remaining) => {
+                futures = remaining;
+
+                // TODO: Don't print this (clone stderr!!) if env_logger isn't logging info.
+                log::info!(
+                    "Processed {}\n\tSize: {}\n\tTime: {}\n\tTrack: {}\n\tffmpeg stderr: {}",
+                    job.attachment.url,
+                    job.output_file.len().human_count_bytes(),
+                    job.job_time.human_duration(),
+                    job.audio_file,
+                    job.stderr.clone().unwrap_or("empty".to_string())
+                );
+                if let Err(why) = msg
+                    .channel_id
+                    .send_message(&ctx.http, |m| {
+                        m.add_file(AttachmentType::Bytes {
+                            data: Cow::from(job.output_file),
+                            filename: "miitopia.webm".to_string(),
+                        })
+                    })
+                    .await
+                {
+                    log::warn!("Error sending message: {:?}", why);
+                }
+            }
+            (Err(error), _index, remaining) => {
+                // Update the futures.
+                futures = remaining;
+
+                // Print the error to the console.
+                log::error!("Error: {}", error);
+
+                errors.push(error);
+            }
+        }
+    }
+
+    // Return the errors if there's errors.
+    if errors.len() > 0 {
+        Err(errors)
+    } else {
+        Ok(())
+    }
 }

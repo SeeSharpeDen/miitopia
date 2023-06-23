@@ -9,8 +9,8 @@ use serde_json::Value;
 use serenity::prelude::*;
 
 use crate::spotify::SpotifyError;
-use crate::Music;
-use crate::{error::MiitopiaError, spotify::Spotify, MAX_LENGTH};
+use crate::{Music, MAX_AUDIO_LENGTH};
+use crate::{error::MiitopiaError, spotify::Spotify};
 
 pub enum AudioSource {
     Miitopia,
@@ -69,7 +69,7 @@ impl AudioSource {
                 let index = rng.gen_range(0..tracks.len());
                 if let Some((path, track_duration)) = tracks.get_index(index) {
                     // If the track is longer than MAX_LENGTH, return track with a random start time.
-                    let start_max = track_duration - track_duration.min(MAX_LENGTH);
+                    let start_max = track_duration - track_duration.min(MAX_AUDIO_LENGTH);
                     let mut start = 0.0;
                     if start_max > 0.0 {
                         start = rng.gen_range(0.0..start_max);

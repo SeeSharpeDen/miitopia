@@ -14,6 +14,7 @@ use regex::Regex;
 use serenity::http::CacheHttp;
 use serenity::model::channel::{AttachmentType, Message, MessageReference};
 use serenity::model::gateway::Ready;
+use serenity::model::prelude::Reaction;
 use serenity::{async_trait, futures, prelude::*};
 
 mod audio_source;
@@ -21,9 +22,9 @@ mod error;
 mod processor;
 mod spotify;
 
-struct Handler;
+const MAX_AUDIO_LENGTH: f32 = 10.0;
 
-const MAX_LENGTH: f32 = 10.0;
+struct Handler;
 
 #[async_trait]
 impl EventHandler for Handler {
@@ -38,82 +39,14 @@ impl EventHandler for Handler {
             return;
         }
 
-        //TODO: Bail out if no valid attachments are provided.
-
-        // Broadcast that we are typing.
-        let _ = ctx.http().broadcast_typing(msg.channel_id.0);
-
-        debug!("{}: {}", msg.author.name, msg.content_safe(&ctx.cache));
-
-        // Setup our rng.
-        let mut rng = SmallRng::from_entropy();
-
-        // Get the content of the discord message.
-        let msg_content = &msg.content_safe(&ctx.cache);
-
-        // Find out where our audio is coming from. Url, Spotify or Miitopia?
-        let source = AudioSource::from_msg_content(&msg_content);
-        trace!("Using {} AudioSource", source);
-
-        // Start processing the attachments.
-        let mut raw_futures = Vec::new();
-        for attachment in msg.attachments {
-            let track = source.get_track(&ctx.data, &mut rng).await;
-            match track {
-                Ok((path, start)) => {
-                    raw_futures.push(apply_music(path, start, MAX_LENGTH, attachment))
-                }
-                Err(err) => {
-                    error!("Failed to get track: {:?} for {}", err, msg.id);
-                    let r = MessageReference::from((msg.channel_id, msg.id)).clone();
-                    if let Err(why) = err.reply_error(&ctx.http, r).await {
-                        warn!("Failed to send error message: {:?}", why);
-                    }
-                    return;
-                }
+        match processor::process_message(&ctx, &msg).await {
+            Ok(()) => {
+                // Good!
             }
-        }
-
-        let unpin_futures: Vec<_> = raw_futures.into_iter().map(Box::pin).collect();
-        let mut futures = unpin_futures;
-
-        while !futures.is_empty() {
-            match futures::future::select_all(futures).await {
-                (Ok(job), _index, remaining) => {
-                    futures = remaining;
-
-                    // TODO: Don't print this (clone stderr!!) if env_logger isn't logging info.
-                    info!(
-                        "Processed {}\n\tSize: {}\n\tTime: {}\n\tTrack: {}\n\tffmpeg stderr: {}",
-                        job.attachment.url,
-                        job.output_file.len().human_count_bytes(),
-                        job.job_time.human_duration(),
-                        job.audio_file,
-                        job.stderr.clone().unwrap_or("empty".to_string())
-                    );
-                    if let Err(why) = msg
-                        .channel_id
-                        .send_message(&ctx.http, |m| {
-                            m.add_file(AttachmentType::Bytes {
-                                data: Cow::from(job.output_file),
-                                filename: "miitopia.webm".to_string(),
-                            })
-                        })
-                        .await
-                    {
-                        warn!("Error sending message: {:?}", why);
-                    }
-                }
-                (Err(error), _index, remaining) => {
-                    // Update the futures.
-                    futures = remaining;
-
-                    // Print the error to the console.
-                    error!("Error: {}", error);
-
-                    // Reply with an error message.
-                    let r = MessageReference::from((msg.channel_id, msg.id)).clone();
-                    if let Err(why) = error.reply_error(&ctx.http, r).await {
+            Err(reasons) => {
+                for reason in reasons {
+                    let r = MessageReference::from((msg.channel_id, msg.id));
+                    if let Err(why) = reason.reply_error(&ctx.http, r).await {
                         warn!("Failed to send error message: {:?}", why);
                     }
                 }
@@ -124,6 +57,44 @@ impl EventHandler for Handler {
     async fn ready(&self, _ctx: Context, ready: Ready) {
         info!("{} is connected!", ready.user.name);
     }
+
+    async fn reaction_add(&self, ctx: Context, reaction: Reaction) {
+        // Get the reaction if it's a custom emoji.
+        // let msg = reaction.message(ctx.http).await;
+        if let serenity::model::prelude::ReactionType::Custom {
+            animated: _,
+            id,
+            name,
+        } = reaction.emoji.clone()
+        {
+            // Only do something if the name of the emoji is "miitopia"
+            match name {
+                Some(name) if name == "miitopia" => {
+                    info!("Someone used the {name} emoji (emoji id: {id})");
+                    let msg = reaction.message(ctx.http.clone()).await;
+                    match msg {
+                        Ok(msg) => match processor::process_message(&ctx, &msg).await {
+                            Ok(()) => {
+                                // Good!
+                            }
+                            Err(reasons) => {
+                                for reason in reasons {
+                                    let r = MessageReference::from((msg.channel_id, msg.id));
+                                    if let Err(why) = reason.reply_error(&ctx.http, r).await {
+                                        warn!("Failed to send error message: {:?}", why);
+                                    }
+                                }
+                            }
+                        },
+                        Err(reason) => {
+                            log::error!("Failed to get the message. Reason: {reason}");
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
 }
 
 #[tokio::main]
@@ -132,7 +103,10 @@ async fn main() {
     // Configure the client with your Discord bot token in the environment.
     let token = env::var("DISCORD_TOKEN").expect("Expected a token in the environment");
     // Set gateway intents, which decides what events the bot will be notified about
-    let intents = GatewayIntents::GUILD_MESSAGES | GatewayIntents::MESSAGE_CONTENT;
+    let intents = GatewayIntents::GUILD_MESSAGES
+        | GatewayIntents::MESSAGE_CONTENT
+        | GatewayIntents::GUILD_MESSAGE_REACTIONS
+        | GatewayIntents::GUILD_EMOJIS_AND_STICKERS;
 
     // Get a spotify token.
     let client_id = env::var("SPOTIFY_ID");
