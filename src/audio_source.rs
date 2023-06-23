@@ -104,16 +104,21 @@ impl AudioSource {
                 // Get our music from the data_read lock.
                 trace!("Getting instance of spotify.");
                 let data_read = ctx_data.read().await;
-                let spotify = data_read
-                    .get::<Spotify>()
-                    .expect("Expected Spotify in TypeMap")
-                    .read()
-                    .await;
+                let spotify_read = data_read.get::<Spotify>();
+                let spotify = match spotify_read {
+                    Some(spotify) => spotify.read().await,
+                    None => {
+                        return Err(MiitopiaError::Spotify(SpotifyError::InvalidToken));
+                    }
+                };
                 trace!("Got an instance of spotify.");
                 let json = spotify
                     .clone()
                     // TODO: move market into a variable a user can change.
-                    .get(format!("https://api.spotify.com/v1/tracks/{}?market=AU", id))
+                    .get(format!(
+                        "https://api.spotify.com/v1/tracks/{}?market=AU",
+                        id
+                    ))
                     .await?
                     .json::<Value>()
                     .await?;

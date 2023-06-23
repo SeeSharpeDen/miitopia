@@ -135,13 +135,20 @@ async fn main() {
     let intents = GatewayIntents::GUILD_MESSAGES | GatewayIntents::MESSAGE_CONTENT;
 
     // Get a spotify token.
-    let client_id = env::var("SPOTIFY_ID").expect("Expected SPOTIFY_ID env var to be set.");
-    let client_secret = env::var("SPOTIFY_SECRET").expect("Expected SPOTIFY_ID env var to be set.");
-    let spotify = match spotify::Spotify::from_credentials(client_id, client_secret).await {
-        Ok(spotify) => spotify,
-        Err(e) => {
-            panic!("Spotify Error: {}", e)
+    let client_id = env::var("SPOTIFY_ID");
+    let spotify = match client_id {
+        Ok(client_id) => {
+            let client_secret = env::var("SPOTIFY_SECRET")
+                .expect("If SPOTIFY_ID is provided SPOTIFY_SECRET is required");
+
+            match spotify::Spotify::from_credentials(client_id, client_secret).await {
+                Ok(spotify) => Some(spotify),
+                Err(e) => {
+                    panic!("Spotify Error: {}", e);
+                }
+            }
         }
+        Err(_) => None,
     };
 
     // Scan all our music
@@ -165,7 +172,9 @@ async fn main() {
         // Add our music and spotify to the context data.
         let mut data = client.data.write().await;
         data.insert::<Music>(Arc::new(RwLock::new(music)));
-        data.insert::<spotify::Spotify>(Arc::new(RwLock::new(spotify)));
+        if let Some(spotify) = spotify {
+            data.insert::<spotify::Spotify>(Arc::new(RwLock::new(spotify)));
+        }
     }
 
     // Finally, start a single shard, and start listening to events.
