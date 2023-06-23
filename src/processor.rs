@@ -195,6 +195,14 @@ pub async fn apply_music(
 pub async fn process_message(ctx: &Context, msg: &Message) -> Result<(), Vec<MiitopiaError>> {
     let _ = ctx.http().broadcast_typing(msg.channel_id.0);
 
+    let typing = match msg.channel_id.start_typing(&ctx.http) {
+        Ok(typing) => Some(typing),
+        Err(reason) => {
+            log::warn!("Failed to start 'typing'. Reason: {reason}");
+            None
+        }
+    };
+
     debug!("{}: {}", msg.author.name, msg.content_safe(&ctx.cache));
 
     // Setup our rng.
@@ -264,6 +272,10 @@ pub async fn process_message(ctx: &Context, msg: &Message) -> Result<(), Vec<Mii
                 errors.push(error);
             }
         }
+    }
+
+    if let Some(typing) = typing {
+        let _ = typing.stop();
     }
 
     // Return the errors if there's errors.

@@ -105,8 +105,7 @@ async fn main() {
     // Set gateway intents, which decides what events the bot will be notified about
     let intents = GatewayIntents::GUILD_MESSAGES
         | GatewayIntents::MESSAGE_CONTENT
-        | GatewayIntents::GUILD_MESSAGE_REACTIONS
-        | GatewayIntents::GUILD_EMOJIS_AND_STICKERS;
+        | GatewayIntents::GUILD_MESSAGE_REACTIONS;
 
     // Get a spotify token.
     let client_id = env::var("SPOTIFY_ID");
