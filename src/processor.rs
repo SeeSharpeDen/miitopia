@@ -45,8 +45,14 @@ pub fn scan_music() -> IndexMap<PathBuf, f32> {
                     } {
                         let secs = duration.as_secs_f32();
 
-                        // Insert our path if it doesn't already exist.
-                        if !map.contains_key(&path_clone) {
+                        // Ignore tracks that are too short.
+                        if secs < MAX_AUDIO_LENGTH {
+                            let path = path_clone.display();
+                            log::info!(
+                                "Ignoring '{path}'. Duration: {secs}s, Minimum: {MAX_AUDIO_LENGTH}."
+                            );
+                        } else if !map.contains_key(&path_clone) {
+                            // Insert our path if it doesn't already exist.
                             map.insert(path_clone, secs);
                         }
                     }
